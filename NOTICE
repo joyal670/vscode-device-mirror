@@ -1,0 +1,19 @@
+Device Mirror
+Copyright (c) 2026 Device Mirror contributors
+Licensed under the MIT License (see LICENSE).
+
+------------------------------------------------------------------------------
+This product redistributes, unmodified, the scrcpy server binary:
+
+    server/scrcpy-server.jar
+    scrcpy v3.1  —  https://github.com/Genymobile/scrcpy
+    Copyright (C) 2018 Genymobile
+    Copyright (C) 2018-2024 Romain Vimont
+
+Licensed under the Apache License, Version 2.0. The full licence text is
+included at server/LICENSE-scrcpy-Apache-2.0.txt and is also available at
+http://www.apache.org/licenses/LICENSE-2.0
+
+No modifications have been made to the binary. It is redistributed as released
+upstream (sha256 958f0944a62f23b1f33a16e9eb14844c1a04b882ca175a738c16d23cb22b86c0).
+------------------------------------------------------------------------------

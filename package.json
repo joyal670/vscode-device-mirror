@@ -1,0 +1,105 @@
+{
+  "name": "vscode-device-mirror",
+  "displayName": "Device Mirror",
+  "description": "Mirror and control a connected Android device inside VS Code.",
+  "version": "0.0.1",
+  "publisher": "REPLACE-WITH-YOUR-PUBLISHER-ID",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.84.0"
+  },
+  "categories": [
+    "Debuggers",
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "deviceMirror.start",
+        "title": "Device Mirror: Start Mirroring",
+        "icon": "$(device-mobile)"
+      },
+      {
+        "command": "deviceMirror.stop",
+        "title": "Device Mirror: Stop Mirroring"
+      }
+    ],
+    "configuration": {
+      "title": "Device Mirror",
+      "properties": {
+        "deviceMirror.adbPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to adb. Leave empty to auto-detect from ANDROID_HOME, the default SDK location, or PATH."
+        },
+        "deviceMirror.mode": {
+          "type": "string",
+          "enum": [
+            "scrcpy",
+            "screencap"
+          ],
+          "enumDescriptions": [
+            "Real-time H.264 mirroring with input. Requires server/scrcpy-server.jar.",
+            "Low-framerate screenshot polling. No input. Needs nothing but adb."
+          ],
+          "default": "scrcpy",
+          "description": "Capture backend."
+        },
+        "deviceMirror.scrcpyVersion": {
+          "type": "string",
+          "default": "3.1",
+          "description": "Version string passed to the scrcpy server. MUST match the bundled scrcpy-server.jar exactly."
+        },
+        "deviceMirror.maxSize": {
+          "type": "number",
+          "default": 1024,
+          "description": "Longest edge of the streamed video, in pixels. Lower is faster."
+        },
+        "deviceMirror.maxFps": {
+          "type": "number",
+          "default": 30,
+          "description": "Capture framerate cap."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.84.0",
+    "@types/ws": "^8.5.12",
+    "@vscode/vsce": "^4.0.0",
+    "typescript": "^5.5.4"
+  },
+  "keywords": [
+    "android",
+    "adb",
+    "scrcpy",
+    "mirror",
+    "device",
+    "emulator",
+    "screen"
+  ],
+  "qna": false,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/REPLACE-WITH-YOUR-USER/vscode-device-mirror.git"
+  },
+  "bugs": {
+    "url": "https://github.com/REPLACE-WITH-YOUR-USER/vscode-device-mirror/issues"
+  },
+  "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#1E2A3A",
+    "theme": "dark"
+  }
+}
