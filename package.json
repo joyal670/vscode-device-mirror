@@ -3,7 +3,7 @@
   "displayName": "Device Mirror",
   "description": "Mirror and control a connected Android device inside VS Code.",
   "version": "0.0.1",
-  "publisher": "REPLACE-WITH-YOUR-PUBLISHER-ID",
+  "publisher": "joyal670",
   "license": "MIT",
   "engines": {
     "vscode": "^1.84.0"
@@ -68,7 +68,9 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "vscode:prepublish": "npm run compile"
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package",
+    "publish:ovsx": "ovsx publish"
   },
   "dependencies": {
     "ws": "^8.18.0"
@@ -78,6 +80,7 @@
     "@types/vscode": "^1.84.0",
     "@types/ws": "^8.5.12",
     "@vscode/vsce": "^4.0.0",
+    "ovsx": "^1.2.0",
     "typescript": "^5.5.4"
   },
   "keywords": [
