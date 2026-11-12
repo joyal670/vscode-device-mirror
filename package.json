@@ -18,12 +18,63 @@
     "commands": [
       {
         "command": "deviceMirror.start",
-        "title": "Device Mirror: Start Mirroring",
+        "title": "Start Mirroring",
+        "category": "Device Mirror",
         "icon": "$(device-mobile)"
       },
       {
         "command": "deviceMirror.stop",
-        "title": "Device Mirror: Stop Mirroring"
+        "title": "Stop Mirroring",
+        "category": "Device Mirror",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "deviceMirror.screenshot",
+        "title": "Take Screenshot",
+        "category": "Device Mirror",
+        "icon": "$(device-camera)"
+      },
+      {
+        "command": "deviceMirror.toggleRecording",
+        "title": "Start/Stop Screen Recording",
+        "category": "Device Mirror",
+        "icon": "$(record)"
+      },
+      {
+        "command": "deviceMirror.installApk",
+        "title": "Install APK on Device…",
+        "category": "Device Mirror",
+        "icon": "$(package)"
+      },
+      {
+        "command": "deviceMirror.pushFile",
+        "title": "Push File to Device…",
+        "category": "Device Mirror",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "deviceMirror.pairWifi",
+        "title": "Pair Device over Wi-Fi…",
+        "category": "Device Mirror",
+        "icon": "$(key)"
+      },
+      {
+        "command": "deviceMirror.connectWifi",
+        "title": "Connect to Device over Wi-Fi…",
+        "category": "Device Mirror",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "deviceMirror.switchToWifi",
+        "title": "Switch USB Device to Wi-Fi",
+        "category": "Device Mirror",
+        "icon": "$(radio-tower)"
+      },
+      {
+        "command": "deviceMirror.refreshDevices",
+        "title": "Refresh Devices",
+        "category": "Device Mirror",
+        "icon": "$(refresh)"
       }
     ],
     "configuration": {
@@ -61,8 +112,123 @@
           "type": "number",
           "default": 30,
           "description": "Capture framerate cap."
+        },
+        "deviceMirror.videoBitRate": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Video bit rate in bits per second (e.g. 8000000). 0 uses the scrcpy default (8 Mbps)."
+        },
+        "deviceMirror.audio": {
+          "type": "boolean",
+          "default": false,
+          "description": "Forward device audio (Android 11+). Sent as uncompressed PCM (~1.5 Mbps). Click the mirror once to allow playback."
+        },
+        "deviceMirror.stayAwake": {
+          "type": "boolean",
+          "default": false,
+          "description": "Keep the device awake while it is being mirrored over USB."
         }
       }
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "deviceMirror.devices",
+          "name": "Android Devices",
+          "icon": "$(device-mobile)"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "deviceMirror.devices",
+        "contents": "No Android devices found.\nConnect one over USB with USB debugging enabled, or pair one over Wi-Fi.\n[Pair over Wi-Fi](command:deviceMirror.pairWifi)\n[Connect over Wi-Fi](command:deviceMirror.connectWifi)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "deviceMirror.pairWifi",
+          "when": "view == deviceMirror.devices",
+          "group": "navigation@1"
+        },
+        {
+          "command": "deviceMirror.refreshDevices",
+          "when": "view == deviceMirror.devices",
+          "group": "navigation@2"
+        },
+        {
+          "command": "deviceMirror.connectWifi",
+          "when": "view == deviceMirror.devices"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "deviceMirror.start",
+          "when": "view == deviceMirror.devices && viewItem =~ /^device-ready/",
+          "group": "inline@1"
+        },
+        {
+          "command": "deviceMirror.stop",
+          "when": "view == deviceMirror.devices && viewItem =~ /mirroring/",
+          "group": "inline@2"
+        },
+        {
+          "command": "deviceMirror.start",
+          "when": "view == deviceMirror.devices && viewItem =~ /^device-ready/",
+          "group": "1_mirror@1"
+        },
+        {
+          "command": "deviceMirror.screenshot",
+          "when": "view == deviceMirror.devices && viewItem =~ /^device-ready/",
+          "group": "2_capture@1"
+        },
+        {
+          "command": "deviceMirror.toggleRecording",
+          "when": "view == deviceMirror.devices && viewItem =~ /^device-ready/",
+          "group": "2_capture@2"
+        },
+        {
+          "command": "deviceMirror.installApk",
+          "when": "view == deviceMirror.devices && viewItem =~ /^device-ready/",
+          "group": "3_files@1"
+        },
+        {
+          "command": "deviceMirror.pushFile",
+          "when": "view == deviceMirror.devices && viewItem =~ /^device-ready/",
+          "group": "3_files@2"
+        },
+        {
+          "command": "deviceMirror.switchToWifi",
+          "when": "view == deviceMirror.devices && viewItem =~ /^device-ready.*-usb/",
+          "group": "4_connection@1"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "deviceMirror.installApk",
+          "when": "resourceExtname == .apk",
+          "group": "7_deviceMirror@1"
+        },
+        {
+          "command": "deviceMirror.pushFile",
+          "when": "!explorerResourceIsFolder",
+          "group": "7_deviceMirror@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "deviceMirror.screenshot",
+          "when": "activeWebviewPanelId == deviceMirror",
+          "group": "navigation@1"
+        },
+        {
+          "command": "deviceMirror.toggleRecording",
+          "when": "activeWebviewPanelId == deviceMirror",
+          "group": "navigation@2"
+        }
+      ]
     }
   },
   "scripts": {

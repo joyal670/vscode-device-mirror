@@ -5,6 +5,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 
 export const KIND_VIDEO = 0x01;
 export const KIND_IMAGE = 0x02;
+export const KIND_AUDIO = 0x03;
 
 /**
  * Frames go webview-ward over a loopback WebSocket rather than postMessage.

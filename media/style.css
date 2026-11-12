@@ -32,9 +32,6 @@ body {
   cursor: default;
 }
 
-#screen:focus-visible {
-  box-shadow: 0 0 0 2px var(--vscode-focusBorder);
-}
 
 /* Elements below set their own display, which would otherwise beat [hidden]. */
 [hidden] {
@@ -95,4 +92,81 @@ body {
 
 #reconnect:hover {
   background: var(--vscode-button-hoverBackground);
+}
+
+/*
+ * Receives keyboard focus instead of the canvas so the browser gives us IME
+ * composition and native copy/paste. Invisible, but must stay focusable —
+ * display:none or visibility:hidden would make it unfocusable.
+ */
+#input {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  resize: none;
+  pointer-events: none;
+}
+
+#stage:focus-within #screen {
+  box-shadow: 0 0 0 2px var(--vscode-focusBorder);
+}
+
+#badges {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+#rec-badge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--vscode-errorForeground, #e51400);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+#audio-badge {
+  padding: 3px 8px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background);
+  color: var(--vscode-foreground);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+#keys .sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 2px;
+  background: var(--vscode-panel-border);
+}
+
+#keys button.active {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+
+#record-btn.active {
+  color: var(--vscode-errorForeground, #e51400);
+  background: var(--vscode-button-secondaryBackground);
+}
+
+/* Screencap is view-only: keep only the buttons that work through adb. */
+#keys.view-only button:not(.any-mode),
+#keys.view-only .sep {
+  display: none;
 }

@@ -32,6 +32,31 @@ structured-clone every frame through the extension RPC layer.
 - **`scrcpy`** — real-time H.264 with touch, scroll, keyboard and hardware keys.
   Requires `server/scrcpy-server.jar` (see `server/README.md`).
 
+## Features
+
+- **Mirror and control** with touch, scroll, the full keyboard (including IME
+  input such as CJK and accents) and hardware keys. Right-click is Back (or
+  wakes the screen), middle-click is Home, **Alt+drag** pinches/rotates around
+  the screen centre.
+- **Clipboard sync.** Cmd/Ctrl+C in the mirror copies the device selection to
+  your clipboard; Cmd/Ctrl+V pastes your clipboard on the device. Anything the
+  device copies lands on your clipboard automatically.
+- **Toolbar**: Recents, Home, Back, notifications, rotate, turn the device
+  screen off while mirroring, screenshot, screen recording, mute, volume, power.
+- **Screenshots** (full resolution PNG) and **screen recordings** (MP4 via the
+  device's `screenrecord`, up to 3 minutes). Also in the editor title bar.
+- **Audio forwarding** (`deviceMirror.audio`, Android 11+). Click the mirror
+  once to allow playback.
+- **Several devices at once**, one tab each.
+- **Android Devices** view in the Explorer: state, connection type, which
+  devices are mirrored or recording, and per-device actions.
+- **Install APKs and push files**: right-click files in the Explorer, or use
+  the commands. Pushed files go to `/sdcard/Download/`.
+- **Wi-Fi**: pair with a pairing code (Android 11+), connect by address, or
+  switch a USB device to Wi-Fi.
+- **Reconnects** by itself when a device drops and comes back; settings
+  changes offer a restart.
+
 ## Running it
 
 ```bash
@@ -102,16 +127,29 @@ untouched.
   hands back a corpse that yields zero frames with no error, so
   `connectVideoWithRetry` waits for the handshake byte instead. Each session also
   generates its own scid so it can never inherit a previous run's socket.
-- **Keyboard.** Only printable characters, Backspace and Enter are mapped. A full
-  Android keycode table is not included.
+- **Keyboard focus.** Keys go to a hidden `<textarea>`, not the canvas: only an
+  editable element gets IME composition and native copy/paste events. Text is
+  sent with `INJECT_TEXT`; non-text keys and Ctrl/Alt combinations go as
+  keycodes with Android meta state. Cmd shortcuts on macOS are left to VS Code.
+- **Command-line length.** Some devices abort `app_process` natively ("stack
+  corruption detected") when the `adb shell` command passes ~300 characters —
+  measured on a Samsung SM-A145P / Android 15: 296 ran, 312 crashed.
+  `scrcpy.ts` therefore passes only options that differ from the server's
+  defaults. Keep it that way when adding options.
+- **H.264 only, raw audio.** VS Code's Electron exposes no WebCodecs decoder
+  for H.265, AV1, VP9, Opus or AAC (all report unsupported in Electron 43), so
+  video is always H.264 and audio is requested as raw PCM
+  (`audio_codec=raw`, ~1.5 Mbps) and played with Web Audio.
 - **Rotation mid-drag.** If the device rotates while a pointer is down, the
   gesture is released at a remapped position rather than continued. Upstream
   scrcpy lets the drag teleport instead; releasing avoids an accidental fling.
 
 ## Not done yet
 
-Multi-device tabs, clipboard sync, drag-and-drop APK install, audio forwarding,
-and a proper status-bar entry point.
+Drag-and-drop onto the mirror panel (use the Explorer context menu instead):
+VS Code only passes drops into a webview while Shift is held, and dropped OS
+files arrive without a path, so their bytes would have to be streamed over the
+bridge.
 
 ## iOS
 

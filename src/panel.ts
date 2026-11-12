@@ -8,9 +8,9 @@ import {
   listDevices,
   reconnectNetworkDevice,
 } from './adb';
-import { Bridge, KIND_IMAGE, KIND_VIDEO } from './bridge';
+import { Bridge, KIND_AUDIO, KIND_IMAGE, KIND_VIDEO } from './bridge';
 import * as control from './control';
-import { ScrcpySession, StreamMeta, VideoPacket } from './scrcpy';
+import { MediaPacket, ScrcpySession, StreamMeta } from './scrcpy';
 import { ScreencapSession } from './screencap';
 
 type Backend = 'scrcpy' | 'screencap';
@@ -37,11 +37,21 @@ interface TouchMessage {
   h: number;
   /** 0..1, from a pen or pressure-sensitive touch. Absent => full pressure. */
   pressure?: number;
+  /** 0 = the real pointer, 1 = the mirrored virtual finger of a pinch. */
+  finger?: 0 | 1;
 }
 
+/**
+ * A key event. `action` 'press' sends down+up (toolbar buttons); 'down'/'up'
+ * mirror the physical key so holds and auto-repeat behave like a keyboard.
+ */
 interface KeyMessage {
   type: 'key';
   keycode: number;
+  action?: 'press' | 'down' | 'up';
+  repeat?: number;
+  /** Android KeyEvent meta state bits. */
+  meta?: number;
 }
 
 interface TextMessage {
@@ -69,21 +79,50 @@ interface ReconnectMessage {
   type: 'reconnect';
 }
 
+/** Toolbar buttons and shortcuts that aren't plain keys. */
+interface ActionMessage {
+  type: 'action';
+  name:
+    | 'rotate'
+    | 'toggleDisplay'
+    | 'backOrScreenOn'
+    | 'notifications'
+    | 'quickSettings'
+    | 'collapsePanels'
+    | 'copy'
+    | 'cut'
+    | 'screenshot'
+    | 'record';
+}
+
+/** Host clipboard text to put on the device (and paste, from Cmd/Ctrl+V). */
+interface PasteMessage {
+  type: 'paste';
+  text: string;
+}
+
 type InboundMessage =
   | TouchMessage
   | KeyMessage
   | TextMessage
   | ScrollMessage
   | ResetVideoMessage
-  | ReconnectMessage;
+  | ReconnectMessage
+  | ActionMessage
+  | PasteMessage;
 
 /**
- * One webview + bridge for the life of the tab, wrapping a capture session
- * that can be torn down and restarted underneath it (device unplugged,
- * settings changed, Reconnect pressed) without reloading the page.
+ * One webview + bridge per mirrored device for the life of its tab, wrapping
+ * a capture session that can be torn down and restarted underneath it
+ * (device unplugged, settings changed, Reconnect pressed) without reloading
+ * the page.
  */
 export class MirrorPanel {
-  static current?: MirrorPanel;
+  private static readonly panels = new Map<string, MirrorPanel>();
+  private static lastActive?: MirrorPanel;
+  private static readonly changed = new vscode.EventEmitter<void>();
+  /** Fires when a mirror opens or closes. */
+  static readonly onDidChange = MirrorPanel.changed.event;
 
   private readonly disposables: vscode.Disposable[] = [];
   private bridge = new Bridge();
@@ -101,6 +140,13 @@ export class MirrorPanel {
   /** transport_id the current session was started on; see startWatching. */
   private sessionTransport?: string;
   private settingsPromptOpen = false;
+  /** Whether we've turned the device's physical display off. */
+  private displayOn = true;
+  /**
+   * Last clipboard text we exchanged with the device, in either direction.
+   * Autosync echoes our own SET_CLIPBOARD back; this suppresses the echo.
+   */
+  private lastClipboard?: string;
   /**
    * Physical display size. Only used to give the screencap canvas a sane
    * aspect before its first PNG lands — touch mapping deliberately does NOT
@@ -112,15 +158,39 @@ export class MirrorPanel {
     private readonly panel: vscode.WebviewPanel,
     private readonly context: vscode.ExtensionContext,
     private adb: string,
-    private readonly device: Device,
+    readonly device: Device,
     private readonly output: vscode.OutputChannel,
   ) {
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+    this.panel.onDidChangeViewState(
+      (e) => {
+        if (e.webviewPanel.active) MirrorPanel.lastActive = this;
+      },
+      null,
+      this.disposables,
+    );
     vscode.workspace.onDidChangeConfiguration(
       (event) => this.onConfigChanged(event),
       null,
       this.disposables,
     );
+  }
+
+  /** Every open mirror. */
+  static all(): MirrorPanel[] {
+    return [...MirrorPanel.panels.values()];
+  }
+
+  static forSerial(serial: string): MirrorPanel | undefined {
+    return MirrorPanel.panels.get(serial);
+  }
+
+  /** The focused mirror, else the most recently focused one still open. */
+  static active(): MirrorPanel | undefined {
+    const focused = MirrorPanel.all().find((p) => p.panel.active);
+    if (focused) return focused;
+    const last = MirrorPanel.lastActive;
+    return last && !last.disposing ? last : undefined;
   }
 
   static async show(
@@ -129,13 +199,20 @@ export class MirrorPanel {
     device: Device,
     output: vscode.OutputChannel,
   ): Promise<void> {
-    // Await so the old session's adb forward is gone before the new one starts.
-    await MirrorPanel.current?.dispose();
+    // One panel per device: mirroring it again just brings its tab forward.
+    const existing = MirrorPanel.panels.get(device.serial);
+    if (existing && !existing.disposing) {
+      existing.panel.reveal();
+      return;
+    }
 
+    // Open beside the editor, but stack further mirrors in the same group
+    // rather than splitting the window once per device.
+    const column = MirrorPanel.active()?.panel.viewColumn ?? vscode.ViewColumn.Beside;
     const panel = vscode.window.createWebviewPanel(
       'deviceMirror',
       device.model ?? device.serial,
-      vscode.ViewColumn.Beside,
+      column,
       {
         enableScripts: true,
         retainContextWhenHidden: true,
@@ -144,10 +221,18 @@ export class MirrorPanel {
         ],
       },
     );
+    panel.iconPath = new vscode.ThemeIcon('device-mobile');
 
     const instance = new MirrorPanel(panel, context, adb, device, output);
-    MirrorPanel.current = instance;
+    MirrorPanel.panels.set(device.serial, instance);
+    MirrorPanel.lastActive = instance;
+    MirrorPanel.changed.fire();
     await instance.start();
+  }
+
+  /** Close every mirror; resolves when all adb forwards are removed. */
+  static async disposeAll(): Promise<void> {
+    await Promise.all(MirrorPanel.all().map((p) => p.dispose()));
   }
 
   private async start(): Promise<void> {
@@ -158,6 +243,15 @@ export class MirrorPanel {
     }
     this.panel.webview.html = this.render(port, this.bridge.token);
     await this.startSession();
+  }
+
+  /** Tell the webview whether a screen recording is running for this device. */
+  setRecording(startedAt: number | undefined): void {
+    this.bridge.sendSticky('recording', {
+      type: 'recording',
+      active: startedAt !== undefined,
+      startedAt,
+    });
   }
 
   // ------------------------------------------------------------ session life
@@ -180,6 +274,10 @@ export class MirrorPanel {
       return; // closed or restarted while adb was answering
     }
 
+    // A new server process starts with the display on.
+    this.displayOn = true;
+    this.bridge.sendSticky('display', { type: 'display', on: true });
+
     if (mode === 'screencap') {
       this.startScreencap(gen);
     } else {
@@ -195,6 +293,7 @@ export class MirrorPanel {
     });
     session.on('log', (line: string) => this.log(line));
     session.on('close', () => this.onSessionEnded(gen, 'Lost the device.'));
+    this.bridge.sendSticky('audio', { type: 'audio', state: 'off' });
     this.bridge.sendSticky('meta', {
       type: 'meta',
       mode: 'screencap',
@@ -210,6 +309,7 @@ export class MirrorPanel {
     config: vscode.WorkspaceConfiguration,
     gen: number,
   ): Promise<void> {
+    const audio = config.get<boolean>('audio', false);
     const session = new ScrcpySession({
       adb: this.adb,
       serial: this.device.serial,
@@ -217,18 +317,44 @@ export class MirrorPanel {
       version: config.get<string>('scrcpyVersion', '3.1'),
       maxSize: config.get<number>('maxSize', 1024),
       maxFps: config.get<number>('maxFps', 30),
+      // H.264 only: VS Code's Electron can decode nothing else through
+      // WebCodecs (H.265, AV1 and VP9 all report unsupported), even though
+      // ScrcpySession and the device may support them.
+      videoCodec: 'h264',
+      videoBitRate: config.get<number>('videoBitRate', 0),
+      audio,
+      stayAwake: config.get<boolean>('stayAwake', false),
     });
     this.scrcpy = session;
+    this.bridge.sendSticky('audio', { type: 'audio', state: audio ? 'pending' : 'off' });
 
     session.on('meta', (meta: StreamMeta) => {
       if (gen !== this.generation) return;
       this.bridge.sendSticky('meta', { type: 'meta', mode: 'scrcpy', ...meta });
       this.setState('streaming');
     });
-    session.on('packet', (packet: VideoPacket) => {
+    session.on('packet', (packet: MediaPacket) => {
       if (gen !== this.generation) return;
       const flags = (packet.isConfig ? 1 : 0) | (packet.isKeyFrame ? 2 : 0);
       this.bridge.sendBinary(KIND_VIDEO, flags, packet.payload);
+    });
+    session.on('audioMeta', ({ codec }: { codec: string }) => {
+      if (gen !== this.generation) return;
+      this.bridge.sendSticky('audio', { type: 'audio', state: 'on', codec });
+    });
+    session.on('audioPacket', (packet: MediaPacket) => {
+      if (gen !== this.generation) return;
+      this.bridge.sendBinary(KIND_AUDIO, packet.isConfig ? 1 : 0, packet.payload);
+    });
+    session.on('audioUnavailable', (reason: string) => {
+      if (gen !== this.generation) return;
+      this.log(`audio unavailable: ${reason}`);
+      this.bridge.sendSticky('audio', { type: 'audio', state: 'unavailable', reason });
+    });
+    session.on('clipboard', (text: string) => {
+      if (gen !== this.generation || text === this.lastClipboard) return;
+      this.lastClipboard = text;
+      void vscode.env.clipboard.writeText(text);
     });
     session.on('log', (line: string) => this.log(line));
     session.on('close', () => this.onSessionEnded(gen, 'Device stream ended.'));
@@ -351,18 +477,26 @@ export class MirrorPanel {
     if (!event.affectsConfiguration('deviceMirror') || this.settingsPromptOpen) {
       return;
     }
+    // With several mirrors open, ask once rather than once per panel.
+    const first = MirrorPanel.all().find((p) => !p.disposing);
+    if (first !== this) {
+      return;
+    }
     // Ask rather than restart outright: a restart drops whatever the user is
     // in the middle of on the device, and several settings often change at once.
     this.settingsPromptOpen = true;
+    const count = MirrorPanel.all().length;
     void vscode.window
       .showInformationMessage(
-        'Device Mirror settings changed. Restart mirroring to apply them?',
+        count > 1
+          ? `Device Mirror settings changed. Restart all ${count} mirrors to apply them?`
+          : 'Device Mirror settings changed. Restart mirroring to apply them?',
         'Restart',
       )
       .then((choice) => {
         this.settingsPromptOpen = false;
         if (choice === 'Restart') {
-          void this.restart();
+          for (const p of MirrorPanel.all()) void p.restart();
         }
       });
   }
@@ -379,20 +513,33 @@ export class MirrorPanel {
       void this.restart();
       return;
     }
+    // Capture works in either backend; it goes through adb, not scrcpy.
+    if (msg.type === 'action' && (msg.name === 'screenshot' || msg.name === 'record')) {
+      void vscode.commands.executeCommand(
+        msg.name === 'screenshot' ? 'deviceMirror.screenshot' : 'deviceMirror.toggleRecording',
+        { device: this.device },
+      );
+      return;
+    }
 
-    if (!this.scrcpy) {
+    const scrcpy = this.scrcpy;
+    if (!scrcpy) {
       return; // screencap mode is view-only, or nothing is running
     }
 
     switch (msg.type) {
       case 'touch':
-        this.scrcpy.sendControl(
+        scrcpy.sendControl(
           control.touchEvent({
             action: msg.action,
             x: msg.x,
             y: msg.y,
             screenWidth: msg.w,
             screenHeight: msg.h,
+            pointerId:
+              msg.finger === 1
+                ? control.POINTER_ID_VIRTUAL_FINGER
+                : control.POINTER_ID_GENERIC_FINGER,
             pressure:
               typeof msg.pressure === 'number' && Number.isFinite(msg.pressure)
                 ? Math.min(1, Math.max(0, msg.pressure))
@@ -401,7 +548,7 @@ export class MirrorPanel {
         );
         break;
       case 'scroll':
-        this.scrcpy.sendControl(
+        scrcpy.sendControl(
           control.scrollEvent({
             x: msg.x,
             y: msg.y,
@@ -412,15 +559,76 @@ export class MirrorPanel {
           }),
         );
         break;
-      case 'key':
-        this.scrcpy.sendControl(control.keyPress(msg.keycode));
+      case 'key': {
+        const meta = Number.isInteger(msg.meta) ? msg.meta! : 0;
+        const repeat = Number.isInteger(msg.repeat) ? msg.repeat! : 0;
+        if (msg.action === 'down') {
+          scrcpy.sendControl(control.keycodeEvent(msg.keycode, control.KEY_ACTION_DOWN, repeat, meta));
+        } else if (msg.action === 'up') {
+          scrcpy.sendControl(control.keycodeEvent(msg.keycode, control.KEY_ACTION_UP, 0, meta));
+        } else {
+          scrcpy.sendControl(control.keyPress(msg.keycode));
+        }
         break;
+      }
       case 'text':
-        this.scrcpy.sendControl(control.injectText(msg.text));
+        if (typeof msg.text === 'string' && msg.text.length > 0) {
+          scrcpy.sendControl(control.injectText(msg.text));
+        }
+        break;
+      case 'paste':
+        if (typeof msg.text === 'string') {
+          // Set the device clipboard and paste it, the way scrcpy does for
+          // MOD+v. Typing it with INJECT_TEXT would mangle non-ASCII text and
+          // be slow for anything long.
+          this.lastClipboard = msg.text;
+          scrcpy.sendControl(control.setClipboard(msg.text, true));
+        }
         break;
       case 'resetVideo':
         this.log('decoder fell behind; dropped frames and requested a key frame');
-        this.scrcpy.sendControl(control.resetVideo());
+        scrcpy.sendControl(control.resetVideo());
+        break;
+      case 'action':
+        this.handleAction(scrcpy, msg.name);
+        break;
+    }
+  }
+
+  private handleAction(scrcpy: ScrcpySession, name: ActionMessage['name']): void {
+    switch (name) {
+      case 'rotate':
+        scrcpy.sendControl(control.rotateDevice());
+        break;
+      case 'toggleDisplay':
+        this.displayOn = !this.displayOn;
+        scrcpy.sendControl(control.setDisplayPower(this.displayOn));
+        this.bridge.sendSticky('display', { type: 'display', on: this.displayOn });
+        break;
+      case 'backOrScreenOn':
+        scrcpy.sendControl(
+          Buffer.concat([
+            control.backOrScreenOn(control.KEY_ACTION_DOWN),
+            control.backOrScreenOn(control.KEY_ACTION_UP),
+          ]),
+        );
+        break;
+      case 'notifications':
+        scrcpy.sendControl(control.expandNotificationPanel());
+        break;
+      case 'quickSettings':
+        scrcpy.sendControl(control.expandSettingsPanel());
+        break;
+      case 'collapsePanels':
+        scrcpy.sendControl(control.collapsePanels());
+        break;
+      case 'copy':
+      case 'cut':
+        // The device copies its selection, then autosync reports the new
+        // clipboard back to us as a 'clipboard' event.
+        scrcpy.sendControl(
+          control.getClipboard(name === 'cut' ? control.COPY_KEY_CUT : control.COPY_KEY_COPY),
+        );
         break;
     }
   }
@@ -444,6 +652,10 @@ export class MirrorPanel {
       `connect-src ws://127.0.0.1:${port}`,
     ].join('; ');
 
+    const isMac = process.platform === 'darwin';
+    const pinchHint = 'Alt+drag: pinch/rotate around the centre';
+    const keys = control;
+
     // The backend is NOT baked into the page: a restart can switch between
     // scrcpy and screencap without reloading, so the webview learns the mode
     // from each 'meta' message instead.
@@ -455,22 +667,35 @@ export class MirrorPanel {
 <link rel="stylesheet" href="${asUri('style.css')}">
 <title>Device Mirror</title>
 </head>
-<body data-port="${port}" data-token="${token}">
+<body data-port="${port}" data-token="${token}" data-mac="${isMac}" data-serial="${escapeAttr(this.device.serial)}">
   <div id="stage">
-    <canvas id="screen" tabindex="0"></canvas>
+    <canvas id="screen" tabindex="-1" title="Right-click: Back · Middle-click: Home · ${pinchHint}"></canvas>
+    <textarea id="input" aria-label="Device keyboard input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
     <div id="status" role="status">
       <span id="status-text">Connecting…</span>
       <button id="reconnect" hidden>Reconnect</button>
     </div>
+    <div id="badges">
+      <span id="rec-badge" hidden>&#9679; REC <span id="rec-time">0:00</span></span>
+      <button id="audio-badge" hidden title="Click to enable device audio">&#128263; Click to enable audio</button>
+    </div>
   </div>
   <nav id="keys" hidden>
-    <button data-keycode="${control.KEYCODE_APP_SWITCH}" title="Recents">&#9723;</button>
-    <button data-keycode="${control.KEYCODE_HOME}" title="Home">&#9675;</button>
-    <button data-keycode="${control.KEYCODE_BACK}" title="Back">&#9665;</button>
+    <button data-keycode="${keys.KEYCODE_APP_SWITCH}" title="Recents">&#9723;</button>
+    <button data-keycode="${keys.KEYCODE_HOME}" title="Home">&#9675;</button>
+    <button data-keycode="${keys.KEYCODE_BACK}" title="Back">&#9665;</button>
+    <span class="sep"></span>
+    <button data-action="notifications" title="Notifications (swipe down)">&#8615;</button>
+    <button data-action="rotate" title="Rotate device">&#10227;</button>
+    <button data-action="toggleDisplay" id="display-btn" title="Turn device screen off (keeps mirroring)">&#9680;</button>
     <span class="spacer"></span>
-    <button data-keycode="${control.KEYCODE_VOLUME_DOWN}" title="Volume down">&minus;</button>
-    <button data-keycode="${control.KEYCODE_VOLUME_UP}" title="Volume up">&plus;</button>
-    <button data-keycode="${control.KEYCODE_POWER}" title="Power">&#9211;</button>
+    <button data-action="screenshot" class="any-mode" title="Save screenshot">&#9113;</button>
+    <button data-action="record" id="record-btn" class="any-mode" title="Start screen recording">&#9210;</button>
+    <button id="mute-btn" hidden title="Mute device audio">&#128266;</button>
+    <span class="sep"></span>
+    <button data-keycode="${keys.KEYCODE_VOLUME_DOWN}" title="Volume down">&minus;</button>
+    <button data-keycode="${keys.KEYCODE_VOLUME_UP}" title="Volume up">&plus;</button>
+    <button data-keycode="${keys.KEYCODE_POWER}" title="Power">&#9211;</button>
   </nav>
   <script nonce="${nonce}" src="${asUri('main.js')}"></script>
 </body>
@@ -495,16 +720,24 @@ export class MirrorPanel {
     this.stopWatching();
     this.disposing = this.stopSession();
 
-    if (MirrorPanel.current === this) {
-      MirrorPanel.current = undefined;
+    if (MirrorPanel.panels.get(this.device.serial) === this) {
+      MirrorPanel.panels.delete(this.device.serial);
+    }
+    if (MirrorPanel.lastActive === this) {
+      MirrorPanel.lastActive = undefined;
     }
     this.bridge.dispose();
     for (const disposable of this.disposables) {
       disposable.dispose();
     }
     this.panel.dispose();
+    MirrorPanel.changed.fire();
     return this.disposing;
   }
+}
+
+function escapeAttr(value: string): string {
+  return value.replace(/[&"<>]/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
 function randomNonce(): string {
