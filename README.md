@@ -1,173 +1,144 @@
 # Device Mirror
 
-Mirror and control a connected Android device inside VS Code — the same idea as
-Android Studio's built-in device mirroring.
+See and control your Android phone inside VS Code. The phone's screen opens in
+an editor tab next to your code, and you use it with your mouse and keyboard.
 
-## How it works
+## Why use it
 
-Android Studio pushes a native agent to `/data/local/tmp`, runs it over
-`adb shell`, and streams H.264 back through an `adb forward` socket while a
-second socket carries injected input events. This does the same thing, but uses
-scrcpy-server as the on-device agent instead of a hand-written one.
+- **Stay in your editor.** Test your app beside the code you're changing,
+  without switching to another window or reaching for the phone.
+- **Nothing to install on the phone.** It uses USB debugging, which Android
+  already has. Nothing stays on the phone after you stop.
+- **Fast and smooth.** A live video stream (up to 30 fps by default), not a
+  slideshow of screenshots.
+- **Use your real keyboard.** Type into any app, including accented and
+  non-Latin text, and copy and paste between your computer and the phone.
+- **Handy tools built in.** Screenshots, screen recordings, installing APKs and
+  sending files, from the toolbar or a right-click.
+- **More than one phone.** Mirror several phones at once, over USB or Wi-Fi.
+- **Free and open source** (MIT).
 
-A VS Code webview is a sandboxed Chromium iframe — no `child_process`, no `net`,
-no filesystem — so the work is split:
+## What you need
 
-| Side | File | Does |
+- **VS Code 1.84 or later**, or another editor that installs extensions from
+  Open VSX.
+- **adb** (Android SDK Platform-Tools). If you have Android Studio, you already
+  have it. Otherwise download
+  [Platform-Tools](https://developer.android.com/tools/releases/platform-tools).
+- **An Android phone or tablet running Android 5.0 or later.** Sound needs
+  Android 11 or later.
+
+## Getting started
+
+1. **Turn on USB debugging on the phone.** Open **Settings › About phone** and
+   tap **Build number** seven times to unlock Developer options. Then turn on
+   **Settings › Developer options › USB debugging**. (The exact menu names
+   vary a little between phone makers.)
+2. **Plug the phone into your computer.** When the phone asks
+   **Allow USB debugging?**, tap **Allow**.
+3. **Start mirroring.** Open the Command Palette (**Cmd+Shift+P** on Mac,
+   **Ctrl+Shift+P** on Windows and Linux) and run
+   **Device Mirror: Start Mirroring**. If more than one phone is connected,
+   pick one from the list.
+
+The phone appears in a new tab. You can also start from the **Android Devices**
+list in the Explorer sidebar.
+
+To stop, close the tab or run **Device Mirror: Stop Mirroring**.
+
+## Using the phone
+
+| To do this | Do this |
+|---|---|
+| Tap | Click |
+| Swipe or drag | Click and drag |
+| Scroll | Mouse wheel or trackpad |
+| Go back | Right-click (also wakes the screen) |
+| Go home | Middle-click |
+| Pinch to zoom | Hold **Alt** (**Option** on Mac) and drag |
+| Type | Click the screen, then type on your keyboard |
+| Copy from the phone | Select text on the phone, then **Cmd/Ctrl+C** |
+| Paste to the phone | **Cmd/Ctrl+V** |
+
+The toolbar under the screen has buttons for:
+- Recent apps, Home and Back
+- Notifications
+- Rotate
+- Turning the phone's own screen off while you keep using it here
+- Screenshot and screen recording
+- Volume and power
+
+## More features
+
+- **Screenshots and recordings.** Use the toolbar or the buttons at the top
+  right of the tab. Screenshots are full-resolution PNG images. Recordings are
+  MP4 videos of up to 3 minutes. Both are saved wherever you choose.
+- **Install an app or send a file.** Right-click an `.apk` file in the Explorer
+  and choose **Install APK on Device**. Right-click any other file and choose
+  **Push File to Device**. Files arrive in the phone's **Download** folder.
+- **Sound.** Turn on the `deviceMirror.audio` setting, then click the mirrored
+  screen once to start playback.
+- **Several phones.** Start mirroring again and pick another phone. Each one
+  gets its own tab.
+- **Copy from the phone automatically.** Anything you copy on the phone also
+  lands on your computer's clipboard.
+- **Reconnects by itself** if the cable is bumped or the phone briefly drops
+  off.
+
+## Over Wi-Fi
+
+Your computer and the phone must be on the same Wi-Fi network.
+
+- **Phone plugged in by USB:** run **Device Mirror: Switch USB Device to
+  Wi-Fi**, then unplug the cable.
+- **No cable (Android 11 and later):** on the phone, open **Developer options ›
+  Wireless debugging › Pair device with pairing code**. Then run **Device
+  Mirror: Pair Device over Wi-Fi** and type in what the phone shows.
+- **Already set up for Wi-Fi:** run **Device Mirror: Connect to Device over
+  Wi-Fi** and enter the phone's address, for example `192.168.1.20:5555`.
+
+Some routers stop devices on the same Wi-Fi from talking to each other ("client
+isolation" or "AP isolation"). If Wi-Fi connections keep failing, check your
+router settings or use a cable.
+
+## Settings
+
+| Setting | Default | What it does |
 |---|---|---|
-| Extension host (Node) | `src/scrcpy.ts` | push server, `adb forward`, own both sockets, parse the frame stream |
-| Extension host (Node) | `src/bridge.ts` | loopback WebSocket carrying frames to the webview |
-| Extension host (Node) | `src/control.ts` | encode scrcpy control messages |
-| Webview (Chromium) | `media/main.js` | decode H.264 with WebCodecs, draw to canvas, capture input |
+| `deviceMirror.maxSize` | `1024` | Longest side of the video, in pixels. Lower is faster. |
+| `deviceMirror.maxFps` | `30` | Maximum frames per second. |
+| `deviceMirror.videoBitRate` | `0` | Video quality in bits per second; `0` uses the default (8 Mbps). |
+| `deviceMirror.audio` | off | Play the phone's sound (Android 11 and later). |
+| `deviceMirror.stayAwake` | off | Keep the phone awake while mirroring over USB. |
+| `deviceMirror.mode` | `scrcpy` | `screencap` is a slow, view-only fallback that needs nothing but adb. |
+| `deviceMirror.adbPath` | (auto) | Full path to adb, if it can't be found automatically. |
 
-Frames travel over a loopback WebSocket rather than `postMessage`, which would
-structured-clone every frame through the extension RPC layer.
+When you change a setting while mirroring, you're offered a restart to apply
+it.
 
-## Backends
+## Troubleshooting
 
-`deviceMirror.mode` picks one:
+- **"adb not found".** Install Platform-Tools (see "What you need"), or set
+  `deviceMirror.adbPath` to the full path of `adb` (`adb.exe` on Windows).
+- **The phone isn't listed, or shows as unauthorized.** Unplug and replug it,
+  unlock it, and tap **Allow** on the USB debugging prompt. Some cables only
+  charge; try another.
+- **Some apps show a black screen.** Banking and video apps often block screen
+  capture. This is the app's choice and can't be bypassed.
+- **No sound.** Sound needs Android 11 or later, the `deviceMirror.audio`
+  setting turned on, and one click on the mirrored screen.
+- **Wi-Fi won't connect.** See the note on client isolation under "Over Wi-Fi".
 
-- **`screencap`** — polls `adb exec-out screencap -p`. ~2fps, view-only, needs
-  nothing but adb. Use it to prove the plumbing works before touching a codec.
-- **`scrcpy`** — real-time H.264 with touch, scroll, keyboard and hardware keys.
-  Requires `server/scrcpy-server.jar` (see `server/README.md`).
+## Good to know
 
-## Features
+- Android only. iPhones and iPads aren't supported.
+- You can't drag files onto the mirrored screen. Right-click them in the
+  Explorer instead.
 
-- **Mirror and control** with touch, scroll, the full keyboard (including IME
-  input such as CJK and accents) and hardware keys. Right-click is Back (or
-  wakes the screen), middle-click is Home, **Alt+drag** pinches/rotates around
-  the screen centre.
-- **Clipboard sync.** Cmd/Ctrl+C in the mirror copies the device selection to
-  your clipboard; Cmd/Ctrl+V pastes your clipboard on the device. Anything the
-  device copies lands on your clipboard automatically.
-- **Toolbar**: Recents, Home, Back, notifications, rotate, turn the device
-  screen off while mirroring, screenshot, screen recording, mute, volume, power.
-- **Screenshots** (full resolution PNG) and **screen recordings** (MP4 via the
-  device's `screenrecord`, up to 3 minutes). Also in the editor title bar.
-- **Audio forwarding** (`deviceMirror.audio`, Android 11+). Click the mirror
-  once to allow playback.
-- **Several devices at once**, one tab each.
-- **Android Devices** view in the Explorer: state, connection type, which
-  devices are mirrored or recording, and per-device actions.
-- **Install APKs and push files**: right-click files in the Explorer, or use
-  the commands. Pushed files go to `/sdcard/Download/`.
-- **Wi-Fi**: pair with a pairing code (Android 11+), connect by address, or
-  switch a USB device to Wi-Fi.
-- **Reconnects** by itself when a device drops and comes back; settings
-  changes offer a restart.
+## Credits
 
-## Running it
+Built on [scrcpy](https://github.com/Genymobile/scrcpy) by Genymobile
+(Apache-2.0), whose small server runs on the phone only while you mirror.
+Device Mirror is released under the MIT license.
 
-```bash
-npm install
-npm run fetch-server   # downloads scrcpy-server 3.1 and checks its SHA-256
-npm run compile
-```
-
-Then press **F5** to launch the Extension Development Host, and run
-**Device Mirror: Start Mirroring** from the command palette.
-
-`npm test` compiles and runs the unit tests (Node's built-in test runner, no
-device needed): the control-message encoders against the scrcpy 3.1 byte
-layouts, the device-message and media-packet parsers, the bridge's access
-checks, adb discovery and the server jar check. `npm run lint` runs ESLint over
-the extension, the webview script and the build scripts. CI runs both on
-Linux, macOS and Windows, then packages the `.vsix` and checks its contents.
-
-The tests don't cover anything that needs VS Code or a phone (the panel, the
-commands, the webview's decoding and input); those were checked by driving a
-real VS Code window against real devices.
-
-## Wire format
-
-Video stream, as parsed in `src/scrcpy.ts`:
-
-```
-[1]  dummy 0x00            first socket only — drop it or every offset shifts
-[64] device name, NUL-padded
-[12] codec id | width | height
-repeating:
-[8]  pts (bit63 = config packet, bit62 = key frame)
-[4]  payload length
-[N]  H.264 Annex B
-```
-
-Touch control message (32 bytes, `src/control.ts`):
-
-```
-u8  type = 2      u8  action        u64 pointer id
-u32 x             u32 y             u16 screenW      u16 screenH
-u16 pressure      u32 actionButton  u32 buttons
-```
-
-`width`/`height` are **not** a scaling hint. Verified against the v3.1 server
-bytecode — `PositionMapper.map()` is literally:
-
-```
-videoSize.equals(clientScreenSize) ?
-    videoToDeviceMatrix.apply(point)   // sizes match -> scale to the device
-  : null                               // mismatch    -> event discarded
-```
-
-and `Controller.injectTouch` returns silently on null. That is how upstream discards input that raced a
-rotation, and it means the only valid coordinate space is the decoded video
-frame, *not* the physical display from `wm size` (which differs as soon as
-`max_size` downscales). `media/main.js` therefore re-reads the size from every
-decoded frame and stamps each event with it; `src/panel.ts` passes it through
-untouched.
-
-## Known sharp edges
-
-- **Version lock.** The scrcpy server argument format is version-specific, so
-  the extension is pinned to scrcpy 3.1 (`src/server.ts`) and checks the jar's
-  SHA-256 before starting. Bumping it means updating that file,
-  `scripts/fetch-server.js` and the protocol code together.
-- **CSP.** The webview needs `connect-src ws://127.0.0.1:<port>` and a script
-  nonce, both generated in `src/panel.ts`. Without them the bridge fails
-  silently.
-- **Cleanup.** `ScrcpySession.dispose()` removes the `adb forward` rule. Skip it
-  and you accumulate a dead rule per reload.
-- **Debugging discarded input.** The discard is logged at **verbose**, not debug:
-  `log_level=verbose` then look for `Ignore positional event generated for size
-  1080x2408 (current size is 456x1024)`. At `debug` you see nothing at all and
-  input just silently does nothing.
-- **Finger, not mouse.** `control.ts` stamps `POINTER_ID_GENERIC_FINGER` (-2).
-  Using `POINTER_ID_MOUSE` (-1) makes scrcpy inject `SOURCE_MOUSE` /
-  `TOOL_TYPE_MOUSE`, which depends on correct button state and is handled
-  inconsistently across devices.
-- **Dead sockets connect fine.** `adb forward` to a stale `localabstract` name
-  still accepts the TCP connection, then closes it. Waiting only for `'connect'`
-  hands back a corpse that yields zero frames with no error, so
-  `connectVideoWithRetry` waits for the handshake byte instead. Each session also
-  generates its own scid so it can never inherit a previous run's socket.
-- **Keyboard focus.** Keys go to a hidden `<textarea>`, not the canvas: only an
-  editable element gets IME composition and native copy/paste events. Text is
-  sent with `INJECT_TEXT`; non-text keys and Ctrl/Alt combinations go as
-  keycodes with Android meta state. Cmd shortcuts on macOS are left to VS Code.
-- **Command-line length.** Some devices abort `app_process` natively ("stack
-  corruption detected") when the `adb shell` command passes ~300 characters —
-  measured on a Samsung SM-A145P / Android 15: 296 ran, 312 crashed.
-  `scrcpy.ts` therefore passes only options that differ from the server's
-  defaults. Keep it that way when adding options.
-- **H.264 only, raw audio.** VS Code's Electron exposes no WebCodecs decoder
-  for H.265, AV1, VP9, Opus or AAC (all report unsupported in Electron 43), so
-  video is always H.264 and audio is requested as raw PCM
-  (`audio_codec=raw`, ~1.5 Mbps) and played with Web Audio.
-- **Rotation mid-drag.** If the device rotates while a pointer is down, the
-  gesture is released at a remapped position rather than continued. Upstream
-  scrcpy lets the drag teleport instead; releasing avoids an accidental fling.
-
-## Not done yet
-
-Drag-and-drop onto the mirror panel (use the Explorer context menu instead):
-VS Code only passes drops into a webview while Shift is held, and dropped OS
-files arrive without a path, so their bytes would have to be streamed over the
-bridge.
-
-## iOS
-
-Not supported and not straightforward. Simulators can be captured with
-`xcrun simctl io booted recordVideo`; physical devices need the AVFoundation
-screen-capture path over usbmuxd, which means a native macOS helper binary
-rather than anything a Node extension can do.
+Want to work on the extension? See [DEVELOPMENT.md](DEVELOPMENT.md).

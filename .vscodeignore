@@ -12,3 +12,4 @@ out/test/**
 scripts/**
 .github/**
 eslint.config.mjs
+DEVELOPMENT.md
