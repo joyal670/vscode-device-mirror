@@ -2,7 +2,7 @@
   "name": "vscode-device-mirror",
   "displayName": "Device Mirror",
   "description": "Mirror and control a connected Android device inside VS Code.",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "joyal670",
   "license": "MIT",
   "engines": {
