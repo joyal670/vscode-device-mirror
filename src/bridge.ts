@@ -21,6 +21,12 @@ export class Bridge {
   private wss?: WebSocketServer;
   private clients = new Set<WebSocket>();
   private onTextMessage?: (msg: unknown) => void;
+  /**
+   * Latest message per key, replayed to a client when it connects. The host
+   * often knows the stream geometry or connection state before the webview
+   * has finished loading; without replay those messages are simply lost.
+   */
+  private sticky = new Map<string, string>();
 
   /** Hex secret the webview appends as `?token=`. */
   readonly token = randomBytes(32).toString('hex');
@@ -48,6 +54,9 @@ export class Bridge {
           return;
         }
         this.clients.add(socket);
+        for (const text of this.sticky.values()) {
+          socket.send(text);
+        }
         socket.on('close', () => this.clients.delete(socket));
         socket.on('message', (data, isBinary) => {
           if (isBinary) return;
@@ -93,6 +102,12 @@ export class Bridge {
         client.send(framed, { binary: true });
       }
     }
+  }
+
+  /** Send now, and replay to any client that connects later. */
+  sendSticky(key: string, message: unknown): void {
+    this.sticky.set(key, JSON.stringify(message));
+    this.sendJson(message);
   }
 
   sendJson(message: unknown): void {

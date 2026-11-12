@@ -36,8 +36,17 @@ body {
   box-shadow: 0 0 0 2px var(--vscode-focusBorder);
 }
 
+/* Elements below set their own display, which would otherwise beat [hidden]. */
+[hidden] {
+  display: none !important;
+}
+
 #status {
   position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 48px);
   padding: 6px 12px;
   border-radius: 4px;
   background: var(--vscode-editorWidget-background);
@@ -71,4 +80,19 @@ body {
 
 #keys button:hover {
   background: var(--vscode-button-secondaryHoverBackground);
+}
+
+#reconnect {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 4px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  font: inherit;
+  cursor: pointer;
+}
+
+#reconnect:hover {
+  background: var(--vscode-button-hoverBackground);
 }

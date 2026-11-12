@@ -11,6 +11,11 @@ export interface Device {
   serial: string;
   state: string;
   model?: string;
+  /**
+   * adb's id for this attachment. A device that disconnects and re-attaches
+   * gets a new one, even if it was gone too briefly for polling to notice.
+   */
+  transportId?: string;
 }
 
 /**
@@ -80,7 +85,10 @@ export async function listDevices(adb: string): Promise<Device[]> {
         .find((token) => token.startsWith('model:'))
         ?.slice('model:'.length)
         .replace(/_/g, ' ');
-      return { serial, state, model };
+      const transportId = rest
+        .find((token) => token.startsWith('transport_id:'))
+        ?.slice('transport_id:'.length);
+      return { serial, state, model, transportId };
     });
 }
 
@@ -109,4 +117,17 @@ export async function adbExec(
     maxBuffer,
   });
   return stdout as Buffer;
+}
+
+/**
+ * Re-attach a network device (`host:port` serial) that adb has dropped. USB
+ * serials can't be reconnected this way, so this is a no-op for them.
+ */
+export async function reconnectNetworkDevice(adb: string, serial: string): Promise<void> {
+  if (!/^[^:]+:\d+$/.test(serial)) return;
+  try {
+    await execFileAsync(adb, ['connect', serial], { timeout: 5000 });
+  } catch {
+    // Still unreachable; the caller polls again.
+  }
 }

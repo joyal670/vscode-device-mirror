@@ -37,7 +37,7 @@ const REMOTE_JAR = '/data/local/tmp/scrcpy-server.jar';
  *   'meta'   (StreamMeta)   once, after the stream header is parsed
  *   'packet' (VideoPacket)  per encoded frame
  *   'log'    (string)       server stdout/stderr
- *   'close'  ()             server or socket went away
+ *   'close'  ()             server or socket went away (once; never after dispose)
  */
 export class ScrcpySession extends EventEmitter {
   private proc?: ChildProcess;
@@ -108,7 +108,7 @@ export class ScrcpySession extends EventEmitter {
 
     this.proc.stdout?.on('data', (d: Buffer) => this.emit('log', d.toString()));
     this.proc.stderr?.on('data', (d: Buffer) => this.emit('log', d.toString()));
-    this.proc.on('close', () => this.emit('close'));
+    this.proc.on('close', () => this.emitClose());
 
     // `adb forward` to a dead localabstract socket still ACCEPTS the TCP
     // connection — adb takes it, fails to open the remote end, then closes. So
@@ -126,9 +126,21 @@ export class ScrcpySession extends EventEmitter {
 
     this.videoSocket.on('data', (chunk) => this.consume(chunk));
     this.consume(initial); // the bytes already read during the handshake
-    this.videoSocket.on('close', () => this.emit('close'));
+    this.videoSocket.on('close', () => this.emitClose());
     this.videoSocket.on('error', (err) => this.emit('log', `video socket: ${err}`));
     this.controlSocket.on('error', (err) => this.emit('log', `control socket: ${err}`));
+  }
+
+  /**
+   * The process and the video socket both report the end of the stream, and
+   * dispose() triggers both. Emit once, and only for an end we didn't cause,
+   * so the panel never tries to reconnect a session it is tearing down.
+   */
+  private closeEmitted = false;
+  private emitClose(): void {
+    if (this.closeEmitted || this.disposed) return;
+    this.closeEmitted = true;
+    this.emit('close');
   }
 
   sendControl(message: Buffer): void {

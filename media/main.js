@@ -11,13 +11,26 @@
   const ACTION_UP = 1;
   const ACTION_MOVE = 2;
 
+  /** Pixels per "line" for wheel events reported in DOM_DELTA_LINE. */
+  const WHEEL_LINE_PX = 40;
+  /** Wheel pixels per unit of scrcpy scroll. Unchanged from the original tuning. */
+  const WHEEL_PX_PER_UNIT = 200;
+
   const canvas = document.getElementById('screen');
   const statusEl = document.getElementById('status');
+  const statusText = document.getElementById('status-text');
+  const reconnectButton = document.getElementById('reconnect');
+  const keysEl = document.getElementById('keys');
   const ctx = canvas.getContext('2d');
 
   const port = document.body.dataset.port;
   const token = document.body.dataset.token;
-  const mode = document.body.dataset.mode;
+
+  /**
+   * 'scrcpy' | 'screencap' | null. Comes from each 'meta' message rather than
+   * the page, because a restart can switch backends without a reload.
+   */
+  let mode = null;
 
   let decoder = null;
   let pendingConfig = null; // held SPS/PPS, prepended to the next key frame
@@ -33,6 +46,10 @@
   let waitingForKey = false;
   let socket = null;
 
+  /** True from 'streaming' until the first frame of that session is drawn. */
+  let awaitingFirstFrame = false;
+  let connectionState = 'connecting';
+
   /**
    * The coordinate space every pointer event is reported in. This is the
    * ENCODED VIDEO size (after max_size downscaling), not the physical display
@@ -42,6 +59,7 @@
    */
   let videoSize = { width: 0, height: 0 };
   let cancelGesture = () => {};
+  let forgetGesture = () => {};
 
   function setVideoSize(width, height) {
     if (videoSize.width === width && videoSize.height === height) {
@@ -55,13 +73,30 @@
     cancelGesture();
   }
 
-  function setStatus(text) {
+  function setStatus(text, { showReconnect = false } = {}) {
+    reconnectButton.hidden = !showReconnect;
     if (!text) {
       statusEl.hidden = true;
       return;
     }
     statusEl.hidden = false;
-    statusEl.textContent = text;
+    statusText.textContent = text;
+  }
+
+  function frameDrawn() {
+    if (awaitingFirstFrame) {
+      awaitingFirstFrame = false;
+      setStatus('');
+    }
+  }
+
+  function resetDecoder() {
+    if (decoder && decoder.state !== 'closed') {
+      decoder.close();
+    }
+    decoder = null;
+    pendingConfig = null;
+    waitingForKey = false;
   }
 
   // ---------------------------------------------------------------- transport
@@ -71,7 +106,6 @@
     socket = new WebSocket(`ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`);
     socket.binaryType = 'arraybuffer';
 
-    socket.onopen = () => setStatus('Waiting for first frame…');
     socket.onclose = () => setStatus('Disconnected.');
     socket.onerror = () => setStatus('Bridge connection failed.');
 
@@ -101,14 +135,38 @@
 
   function handleJson(message) {
     if (message.type === 'meta') {
+      // A new session: whatever the decoder held belongs to the old stream.
+      resetDecoder();
+      mode = message.mode;
+      keysEl.hidden = mode !== 'scrcpy';
       setVideoSize(message.width, message.height);
-      setStatus('Waiting for first frame…');
-    } else if (message.type === 'error') {
-      setStatus(message.message);
-    } else if (message.type === 'closed') {
-      setStatus('Device stream ended.');
+    } else if (message.type === 'state') {
+      handleState(message.state, message.message);
     }
   }
+
+  function handleState(state, message) {
+    connectionState = state;
+    if (state === 'connecting') {
+      awaitingFirstFrame = false;
+      setStatus('Connecting…');
+    } else if (state === 'streaming') {
+      awaitingFirstFrame = true;
+      setStatus('Waiting for first frame…');
+    } else if (state === 'disconnected') {
+      awaitingFirstFrame = false;
+      // The session that owned this gesture is gone; don't send it an UP.
+      forgetGesture();
+      resetDecoder();
+      setStatus(message || 'Disconnected.', { showReconnect: true });
+    }
+  }
+
+  reconnectButton.addEventListener('click', () => {
+    reconnectButton.hidden = true;
+    setStatus('Reconnecting…');
+    send({ type: 'reconnect' });
+  });
 
   // -------------------------------------------------------------- tier 0 path
 
@@ -117,7 +175,7 @@
     setVideoSize(bitmap.width, bitmap.height);
     ctx.drawImage(bitmap, 0, 0);
     bitmap.close();
-    setStatus('');
+    frameDrawn();
   }
 
   // -------------------------------------------------------------- tier 1 path
@@ -158,7 +216,7 @@
         setVideoSize(frame.displayWidth, frame.displayHeight);
         ctx.drawImage(frame, 0, 0);
         frame.close();
-        setStatus('');
+        frameDrawn();
       },
       error: (err) => setStatus(`Decoder error: ${err.message}`),
     });
@@ -245,84 +303,111 @@
     };
   }
 
-  if (mode === 'scrcpy') {
-    let down = false;
-
-    /**
-     * Called by setVideoSize() when the device rotates mid-gesture.
-     *
-     * The release is stamped with the NEW size, not the one the gesture
-     * started in: setVideoSize() updates videoSize before calling this, and an
-     * event carrying a stale size is rejected by the server — which would
-     * leave the pointer stuck down on the device. Releasing at a remapped
-     * position is arbitrary, but it is better than a dragged finger teleporting
-     * across the rotated layout and triggering a fling.
-     */
-    cancelGesture = () => {
-      if (!down) return;
-      down = false;
-      send({ type: 'touch', action: ACTION_UP, ...pointInCurrentFrame(lastFraction) });
-    };
-
-    canvas.addEventListener('pointerdown', (event) => {
-      if (!videoSize.width) return; // no frame decoded yet, nothing to aim at
-      canvas.setPointerCapture(event.pointerId);
-      canvas.focus();
-      down = true;
-      send({ type: 'touch', action: ACTION_DOWN, ...toVideoPoint(event) });
-    });
-
-    canvas.addEventListener('pointermove', (event) => {
-      if (!down) return;
-      send({ type: 'touch', action: ACTION_MOVE, ...toVideoPoint(event) });
-    });
-
-    const release = (event) => {
-      if (!down) return;
-      down = false;
-      send({ type: 'touch', action: ACTION_UP, ...toVideoPoint(event) });
-    };
-    canvas.addEventListener('pointerup', release);
-    canvas.addEventListener('pointercancel', release);
-
-    canvas.addEventListener(
-      'wheel',
-      (event) => {
-        event.preventDefault();
-        if (!videoSize.width) return;
-        send({
-          type: 'scroll',
-          ...toVideoPoint(event),
-          hscroll: -event.deltaX / 200,
-          vscroll: -event.deltaY / 200,
-        });
-      },
-      { passive: false },
-    );
-
-    canvas.addEventListener('keydown', (event) => {
-      // Printable characters go through INJECT_TEXT; everything else would
-      // need an Android keycode map, which is deliberately left as an exercise.
-      if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
-        event.preventDefault();
-        send({ type: 'text', text: event.key });
-      } else if (event.key === 'Backspace') {
-        event.preventDefault();
-        send({ type: 'key', keycode: 67 }); // KEYCODE_DEL
-      } else if (event.key === 'Enter') {
-        event.preventDefault();
-        send({ type: 'key', keycode: 66 }); // KEYCODE_ENTER
-      }
-    });
-
-    document.querySelectorAll('#keys button').forEach((button) => {
-      button.addEventListener('click', () => {
-        send({ type: 'key', keycode: Number(button.dataset.keycode) });
-      });
-    });
-  } else {
-    document.getElementById('keys').hidden = true;
+  /**
+   * Real pressure from a pen or pressure-sensitive touchscreen, else
+   * undefined (the host then sends full pressure). Mice report a constant 0.5
+   * while a button is held, and so does touch hardware that can't measure
+   * pressure, so 0.5 is treated as "unknown" rather than "half".
+   */
+  function pressureOf(event) {
+    if (event.pointerType === 'mouse') return undefined;
+    if (!(event.pressure > 0) || event.pressure === 0.5) return undefined;
+    return event.pressure;
   }
+
+  /** Normalise any wheel deltaMode to pixels. */
+  function wheelPixels(event, delta) {
+    if (event.deltaMode === 1) return delta * WHEEL_LINE_PX; // DOM_DELTA_LINE
+    if (event.deltaMode === 2) return delta * canvas.getBoundingClientRect().height; // DOM_DELTA_PAGE
+    return delta; // DOM_DELTA_PIXEL
+  }
+
+  /** Input only goes anywhere while a scrcpy session is actually up. */
+  function inputEnabled() {
+    return mode === 'scrcpy' && connectionState === 'streaming' && videoSize.width > 0;
+  }
+
+  let down = false;
+
+  /**
+   * Called by setVideoSize() when the device rotates mid-gesture.
+   *
+   * The release is stamped with the NEW size, not the one the gesture
+   * started in: setVideoSize() updates videoSize before calling this, and an
+   * event carrying a stale size is rejected by the server — which would
+   * leave the pointer stuck down on the device. Releasing at a remapped
+   * position is arbitrary, but it is better than a dragged finger teleporting
+   * across the rotated layout and triggering a fling.
+   */
+  cancelGesture = () => {
+    if (!down) return;
+    down = false;
+    send({ type: 'touch', action: ACTION_UP, ...pointInCurrentFrame(lastFraction) });
+  };
+
+  /** Drop a gesture without telling the device (its session is gone). */
+  forgetGesture = () => {
+    down = false;
+  };
+
+  canvas.addEventListener('pointerdown', (event) => {
+    if (!inputEnabled()) return;
+    canvas.setPointerCapture(event.pointerId);
+    canvas.focus();
+    down = true;
+    send({ type: 'touch', action: ACTION_DOWN, ...toVideoPoint(event), pressure: pressureOf(event) });
+  });
+
+  canvas.addEventListener('pointermove', (event) => {
+    if (!down) return;
+    send({ type: 'touch', action: ACTION_MOVE, ...toVideoPoint(event), pressure: pressureOf(event) });
+  });
+
+  const release = (event) => {
+    if (!down) return;
+    down = false;
+    send({ type: 'touch', action: ACTION_UP, ...toVideoPoint(event) });
+  };
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
+
+  canvas.addEventListener(
+    'wheel',
+    (event) => {
+      event.preventDefault();
+      if (!inputEnabled()) return;
+      send({
+        type: 'scroll',
+        ...toVideoPoint(event),
+        hscroll: -wheelPixels(event, event.deltaX) / WHEEL_PX_PER_UNIT,
+        vscroll: -wheelPixels(event, event.deltaY) / WHEEL_PX_PER_UNIT,
+      });
+    },
+    { passive: false },
+  );
+
+  canvas.addEventListener('keydown', (event) => {
+    if (!inputEnabled()) return;
+    // Printable characters go through INJECT_TEXT; everything else would
+    // need an Android keycode map, which is deliberately left as an exercise.
+    if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault();
+      send({ type: 'text', text: event.key });
+    } else if (event.key === 'Backspace') {
+      event.preventDefault();
+      send({ type: 'key', keycode: 67 }); // KEYCODE_DEL
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      send({ type: 'key', keycode: 66 }); // KEYCODE_ENTER
+    }
+  });
+
+  document.querySelectorAll('#keys button').forEach((button) => {
+    button.addEventListener('click', () => {
+      if (!inputEnabled()) return;
+      send({ type: 'key', keycode: Number(button.dataset.keycode) });
+    });
+  });
 
   connect();
 })();
