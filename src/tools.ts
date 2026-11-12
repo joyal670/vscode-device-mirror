@@ -33,7 +33,7 @@ export async function installApk(adb: string, serial: string, apkPath: string): 
     out = await adbText(adb, ['-s', serial, 'install', '-r', '-d', apkPath], 10 * 60_000);
   } catch (err) {
     const stderr = (err as { stderr?: Buffer | string }).stderr?.toString().trim();
-    throw new Error(stderr || String(err));
+    throw new Error(stderr || String(err), { cause: err });
   }
   if (!/\bSuccess\b/.test(out)) {
     throw new Error(out.split('\n').pop() || 'install failed');
@@ -47,7 +47,7 @@ export async function pushFile(adb: string, serial: string, localPath: string): 
     await adbText(adb, ['-s', serial, 'push', localPath, PUSH_DESTINATION], 10 * 60_000);
   } catch (err) {
     const stderr = (err as { stderr?: Buffer | string }).stderr?.toString().trim();
-    throw new Error(stderr || String(err));
+    throw new Error(stderr || String(err), { cause: err });
   }
   const name = localPath.split(/[\\/]/).pop()!;
   // Without a media scan the file exists but Files/Gallery apps won't show it
@@ -67,7 +67,7 @@ export async function pushFile(adb: string, serial: string, localPath: string): 
  */
 const UNREACHABLE = /protocol fault|host is down|no route to host|timed out|connection refused|network is unreachable|failed to connect|cannot connect|unable to connect/i;
 
-function explainNetworkError(message: string): Error {
+export function explainNetworkError(message: string): Error {
   if (!UNREACHABLE.test(message)) {
     return new Error(message);
   }
@@ -79,7 +79,7 @@ function explainNetworkError(message: string): Error {
 
 /** `adb pair` prints "Successfully paired" on success; anything else is a failure. */
 export async function pairWifi(adb: string, hostPort: string, code: string): Promise<void> {
-  let out = '';
+  let out: string;
   try {
     out = await adbText(adb, ['pair', hostPort, code], 30_000);
   } catch (err) {

@@ -1,9 +1,9 @@
 import { ChildProcess, spawn } from 'child_process';
 import { EventEmitter } from 'events';
-import { existsSync } from 'fs';
 import * as net from 'net';
 import { adbExec } from './adb';
 import { DeviceMessage, parseDeviceMessages } from './control';
+import { SCRCPY_VERSION, verifyServerJar } from './server';
 
 export type VideoCodec = 'h264' | 'h265' | 'av1';
 
@@ -29,7 +29,6 @@ export interface ScrcpyOptions {
   adb: string;
   serial: string;
   serverJar: string;
-  version: string;
   maxSize: number;
   maxFps: number;
   videoCodec?: VideoCodec;
@@ -94,7 +93,7 @@ export class ScrcpySession extends EventEmitter {
   }
 
   async start(): Promise<void> {
-    const { adb, serial, serverJar, version, maxSize, maxFps } = this.opts;
+    const { adb, serial, serverJar, maxSize, maxFps } = this.opts;
     const videoCodec = this.opts.videoCodec ?? 'h264';
     const audio = this.opts.audio ?? false;
     // A fixed scid lets a stale socket from a previous run be silently
@@ -103,11 +102,8 @@ export class ScrcpySession extends EventEmitter {
       this.opts.scid ??
       Math.floor(Math.random() * 0x7fffffff).toString(16).padStart(8, '0');
 
-    if (!existsSync(serverJar)) {
-      throw new Error(
-        `scrcpy-server.jar not found at ${serverJar}. See server/README.md for how to fetch it.`,
-      );
-    }
+    await verifyServerJar(serverJar);
+    this.throwIfDisposed();
 
     await adbExec(adb, ['-s', serial, 'push', serverJar, REMOTE_JAR]);
     this.throwIfDisposed();
@@ -141,7 +137,7 @@ export class ScrcpySession extends EventEmitter {
     // video_codec is h264.
     const command = [
       `CLASSPATH=${REMOTE_JAR}`,
-      'app_process', '/', 'com.genymobile.scrcpy.Server', version,
+      'app_process', '/', 'com.genymobile.scrcpy.Server', SCRCPY_VERSION,
       `scid=${scid}`,
       'tunnel_forward=true',
       `max_size=${maxSize}`,
@@ -412,6 +408,8 @@ export class StreamReader {
   }
 
   private peek(n: number): Buffer {
+    // An empty media packet is legal, and may arrive with nothing buffered.
+    if (n === 0) return Buffer.alloc(0);
     if (this.chunks[0].length >= n) {
       return Buffer.from(this.chunks[0].subarray(0, n));
     }

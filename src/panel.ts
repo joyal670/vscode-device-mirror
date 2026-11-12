@@ -314,7 +314,6 @@ export class MirrorPanel {
       adb: this.adb,
       serial: this.device.serial,
       serverJar: path.join(this.context.extensionPath, 'server', 'scrcpy-server.jar'),
-      version: config.get<string>('scrcpyVersion', '3.1'),
       maxSize: config.get<number>('maxSize', 1024),
       maxFps: config.get<number>('maxFps', 30),
       // H.264 only: VS Code's Electron can decode nothing else through

@@ -8,3 +8,7 @@ tsconfig.json
 .gitignore
 .git/**
 *.vsix
+out/test/**
+scripts/**
+.github/**
+eslint.config.mjs

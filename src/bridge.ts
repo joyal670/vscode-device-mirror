@@ -59,6 +59,10 @@ export class Bridge {
           socket.send(text);
         }
         socket.on('close', () => this.clients.delete(socket));
+        // ws closes the socket itself on protocol errors (e.g. a message over
+        // maxPayload); without a listener the error would also be thrown as
+        // an uncaught exception in the extension host.
+        socket.on('error', () => undefined);
         socket.on('message', (data, isBinary) => {
           if (isBinary) return;
           try {

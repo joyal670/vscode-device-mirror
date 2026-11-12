@@ -61,11 +61,23 @@ structured-clone every frame through the extension RPC layer.
 
 ```bash
 npm install
+npm run fetch-server   # downloads scrcpy-server 3.1 and checks its SHA-256
 npm run compile
 ```
 
 Then press **F5** to launch the Extension Development Host, and run
 **Device Mirror: Start Mirroring** from the command palette.
+
+`npm test` compiles and runs the unit tests (Node's built-in test runner, no
+device needed): the control-message encoders against the scrcpy 3.1 byte
+layouts, the device-message and media-packet parsers, the bridge's access
+checks, adb discovery and the server jar check. `npm run lint` runs ESLint over
+the extension, the webview script and the build scripts. CI runs both on
+Linux, macOS and Windows, then packages the `.vsix` and checks its contents.
+
+The tests don't cover anything that needs VS Code or a phone (the panel, the
+commands, the webview's decoding and input); those were checked by driving a
+real VS Code window against real devices.
 
 ## Wire format
 
@@ -107,8 +119,10 @@ untouched.
 
 ## Known sharp edges
 
-- **Version lock.** The scrcpy server argument format is version-specific. Pin
-  one release and keep `deviceMirror.scrcpyVersion` in sync.
+- **Version lock.** The scrcpy server argument format is version-specific, so
+  the extension is pinned to scrcpy 3.1 (`src/server.ts`) and checks the jar's
+  SHA-256 before starting. Bumping it means updating that file,
+  `scripts/fetch-server.js` and the protocol code together.
 - **CSP.** The webview needs `connect-src ws://127.0.0.1:<port>` and a script
   nonce, both generated in `src/panel.ts`. Without them the bridge fails
   silently.

@@ -53,7 +53,7 @@ export function activate(context: vscode.ExtensionContext): void {
   updateStatus();
   context.subscriptions.push(MirrorPanel.onDidChange(updateStatus));
 
-  const register = (id: string, fn: (...args: any[]) => unknown) =>
+  const register = <A extends unknown[]>(id: string, fn: (...args: A) => unknown) =>
     context.subscriptions.push(vscode.commands.registerCommand(id, fn));
 
   register('deviceMirror.start', async (arg?: CommandArg) => {
