@@ -11,6 +11,8 @@ export const TYPE_INJECT_TEXT = 1;
 export const TYPE_INJECT_TOUCH_EVENT = 2;
 export const TYPE_INJECT_SCROLL_EVENT = 3;
 export const TYPE_BACK_OR_SCREEN_ON = 4;
+/** scrcpy 3.x; verified present in the bundled 3.1 server. */
+export const TYPE_RESET_VIDEO = 17;
 
 export const ACTION_DOWN = 0;
 export const ACTION_UP = 1;
@@ -125,4 +127,13 @@ export function scrollEvent(opts: {
 function clamp16(value: number): number {
   const scaled = Math.round(value * 0x7fff);
   return Math.max(-0x8000, Math.min(0x7fff, scaled));
+}
+
+/**
+ * Ask the server to restart capture/encoding, which makes it emit a fresh
+ * config packet and key frame immediately instead of at the next scheduled
+ * I-frame (up to 10s away). Used to recover after dropping frames.
+ */
+export function resetVideo(): Buffer {
+  return Buffer.from([TYPE_RESET_VIDEO]);
 }

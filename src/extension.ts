@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { Device, findAdb, listDevices } from './adb';
+import { Device, findAdb, isNotFound, listDevices } from './adb';
 import { MirrorPanel } from './panel';
 
 let output: vscode.OutputChannel;
@@ -11,18 +11,23 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('deviceMirror.start', async () => {
       const adb = findAdb();
-      if (!adb) {
-        void vscode.window.showErrorMessage(
-          'Device Mirror: adb not found. Set deviceMirror.adbPath.',
-        );
-        return;
-      }
 
       let devices: Device[];
       try {
         devices = await listDevices(adb);
       } catch (err) {
-        void vscode.window.showErrorMessage(`Device Mirror: adb failed — ${err}`);
+        if (isNotFound(err)) {
+          const configured = vscode.workspace
+            .getConfiguration('deviceMirror')
+            .get<string>('adbPath');
+          void vscode.window.showErrorMessage(
+            configured
+              ? `Device Mirror: adb not found at "${configured}". Fix deviceMirror.adbPath.`
+              : 'Device Mirror: adb not found. Install Android SDK platform-tools, or set deviceMirror.adbPath.',
+          );
+        } else {
+          void vscode.window.showErrorMessage(`Device Mirror: adb failed — ${err}`);
+        }
         return;
       }
 
@@ -56,8 +61,9 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('deviceMirror.stop', () => {
-      void vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+    vscode.commands.registerCommand('deviceMirror.stop', async () => {
+      // Close the mirror specifically — not whatever editor happens to have focus.
+      await MirrorPanel.current?.dispose();
     }),
   );
 }
@@ -74,6 +80,10 @@ async function pickDevice(devices: Device[]): Promise<Device | undefined> {
   return picked?.device;
 }
 
-export function deactivate(): void {
-  // MirrorPanel tears down its own sockets, process and adb forward on dispose.
+/**
+ * Returning the promise makes VS Code wait (briefly) for teardown, so the
+ * `adb forward --remove` actually runs on window reload instead of leaking.
+ */
+export function deactivate(): Promise<void> | undefined {
+  return MirrorPanel.current?.dispose();
 }

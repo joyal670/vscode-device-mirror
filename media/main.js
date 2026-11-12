@@ -16,10 +16,21 @@
   const ctx = canvas.getContext('2d');
 
   const port = document.body.dataset.port;
+  const token = document.body.dataset.token;
   const mode = document.body.dataset.mode;
 
   let decoder = null;
   let pendingConfig = null; // held SPS/PPS, prepended to the next key frame
+
+  /**
+   * Frames still queued in the decoder. Past this, we are showing the past:
+   * every queued frame is ~33ms of latency at 30fps, and on a slow machine the
+   * queue only grows. Deltas can't be skipped individually (each depends on
+   * the last), so drop everything until the next key frame and ask the
+   * server for one right away rather than waiting for the scheduled I-frame.
+   */
+  const MAX_DECODE_QUEUE = 3;
+  let waitingForKey = false;
   let socket = null;
 
   /**
@@ -56,7 +67,8 @@
   // ---------------------------------------------------------------- transport
 
   function connect() {
-    socket = new WebSocket(`ws://127.0.0.1:${port}`);
+    // The bridge rejects connections without this per-session secret.
+    socket = new WebSocket(`ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`);
     socket.binaryType = 'arraybuffer';
 
     socket.onopen = () => setStatus('Waiting for first frame…');
@@ -168,6 +180,16 @@
 
     if (!decoder || decoder.state !== 'configured') {
       return; // nothing decodable until the config packet has arrived
+    }
+
+    if (isKey) {
+      waitingForKey = false;
+    } else if (waitingForKey) {
+      return;
+    } else if (decoder.decodeQueueSize > MAX_DECODE_QUEUE) {
+      waitingForKey = true;
+      send({ type: 'resetVideo' });
+      return;
     }
 
     let data = payload;

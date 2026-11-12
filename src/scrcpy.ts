@@ -23,7 +23,6 @@ export interface ScrcpyOptions {
   version: string;
   maxSize: number;
   maxFps: number;
-  port: number;
   scid?: string;
   /** 'debug' surfaces PositionMapper's rejection of mis-sized input events. */
   logLevel?: 'verbose' | 'debug' | 'info' | 'warn' | 'error';
@@ -47,13 +46,15 @@ export class ScrcpySession extends EventEmitter {
   private buffer = Buffer.alloc(0);
   private stage: 'dummy' | 'deviceMeta' | 'codecMeta' | 'packets' = 'dummy';
   private disposed = false;
+  /** Local end of the adb forward; set once adb has allocated it. */
+  private port?: number;
 
   constructor(private readonly opts: ScrcpyOptions) {
     super();
   }
 
   async start(): Promise<void> {
-    const { adb, serial, serverJar, version, maxSize, maxFps, port } = this.opts;
+    const { adb, serial, serverJar, version, maxSize, maxFps } = this.opts;
     // A fixed scid lets a stale socket from a previous run be silently
     // inherited, so generate one per session the way the scrcpy client does.
     const scid =
@@ -67,9 +68,24 @@ export class ScrcpySession extends EventEmitter {
     }
 
     await adbExec(adb, ['-s', serial, 'push', serverJar, REMOTE_JAR]);
-    await adbExec(adb, [
-      '-s', serial, 'forward', `tcp:${port}`, `localabstract:scrcpy_${scid}`,
+    this.throwIfDisposed();
+
+    // tcp:0 => adb picks a free local port and prints it, so concurrent
+    // sessions (or other tools) can never collide on a forward rule.
+    const allocated = await adbExec(adb, [
+      '-s', serial, 'forward', 'tcp:0', `localabstract:scrcpy_${scid}`,
     ]);
+    const port = Number.parseInt(allocated.toString().trim(), 10);
+    if (!Number.isInteger(port) || port <= 0) {
+      throw new Error(`adb forward did not report a port: ${allocated.toString()}`);
+    }
+    this.port = port;
+    // If the panel closed while adb was working, dispose() already ran and
+    // could not see this forward; remove it here instead of leaking it.
+    if (this.disposed) {
+      await this.removeForward();
+      this.throwIfDisposed();
+    }
 
     // Arg format is version-specific. These are scrcpy 2.x/3.x key=value args.
     this.proc = spawn(adb, [
@@ -101,6 +117,12 @@ export class ScrcpySession extends EventEmitter {
     const { socket, initial } = await connectVideoWithRetry(port);
     this.videoSocket = socket;
     this.controlSocket = await connectWithRetry(port);
+    if (this.disposed) {
+      // dispose() ran mid-handshake, before these sockets existed.
+      this.videoSocket.destroy();
+      this.controlSocket.destroy();
+      this.throwIfDisposed();
+    }
 
     this.videoSocket.on('data', (chunk) => this.consume(chunk));
     this.consume(initial); // the bytes already read during the handshake
@@ -185,12 +207,25 @@ export class ScrcpySession extends EventEmitter {
 
     // Leaking a forward per reload is the classic way to end up with a
     // hundred dead tcp: rules, so always remove it.
+    await this.removeForward();
+  }
+
+  private async removeForward(): Promise<void> {
+    const port = this.port;
+    if (port === undefined) return;
+    this.port = undefined;
     try {
       await adbExec(this.opts.adb, [
-        '-s', this.opts.serial, 'forward', '--remove', `tcp:${this.opts.port}`,
+        '-s', this.opts.serial, 'forward', '--remove', `tcp:${port}`,
       ]);
     } catch {
       // The device may already be gone; nothing useful to do.
+    }
+  }
+
+  private throwIfDisposed(): void {
+    if (this.disposed) {
+      throw new Error('session closed during startup');
     }
   }
 }

@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { Device, getScreenSize } from './adb';
@@ -44,15 +45,26 @@ interface ScrollMessage {
   vscroll: number;
 }
 
-type InboundMessage = TouchMessage | KeyMessage | TextMessage | ScrollMessage;
+/** Webview dropped frames to catch up and needs a fresh key frame. */
+interface ResetVideoMessage {
+  type: 'resetVideo';
+}
+
+type InboundMessage =
+  | TouchMessage
+  | KeyMessage
+  | TextMessage
+  | ScrollMessage
+  | ResetVideoMessage;
 
 export class MirrorPanel {
-  private static current?: MirrorPanel;
+  static current?: MirrorPanel;
 
   private readonly disposables: vscode.Disposable[] = [];
   private bridge = new Bridge();
   private scrcpy?: ScrcpySession;
   private screencap?: ScreencapSession;
+  private disposing?: Promise<void>;
   /**
    * Physical display size. Only used to give the screencap canvas a sane
    * aspect before its first PNG lands — touch mapping deliberately does NOT
@@ -76,7 +88,8 @@ export class MirrorPanel {
     device: Device,
     output: vscode.OutputChannel,
   ): Promise<void> {
-    MirrorPanel.current?.dispose();
+    // Await so the old session's adb forward is gone before the new one starts.
+    await MirrorPanel.current?.dispose();
 
     const panel = vscode.window.createWebviewPanel(
       'deviceMirror',
@@ -109,7 +122,11 @@ export class MirrorPanel {
       this.log(`could not read screen size, assuming 1080x1920: ${err}`);
     }
 
-    this.panel.webview.html = this.render(port, mode);
+    if (this.disposing) {
+      return; // closed while adb was answering; don't start a session for nobody
+    }
+
+    this.panel.webview.html = this.render(port, this.bridge.token, mode);
 
     if (mode === 'screencap') {
       await this.startScreencap();
@@ -143,8 +160,6 @@ export class MirrorPanel {
       version: config.get<string>('scrcpyVersion', '3.1'),
       maxSize: config.get<number>('maxSize', 1024),
       maxFps: config.get<number>('maxFps', 30),
-      // Random-ish port so two panels don't fight over one forward rule.
-      port: 27183 + Math.floor(Math.random() * 100),
     });
     this.scrcpy = session;
 
@@ -161,6 +176,9 @@ export class MirrorPanel {
     try {
       await session.start();
     } catch (err) {
+      if (this.disposing) {
+        return; // the user closed the panel mid-startup; not an error
+      }
       this.log(`${err}`);
       void vscode.window.showErrorMessage(`Device Mirror: ${err}`);
       this.bridge.sendJson({ type: 'error', message: String(err) });
@@ -202,10 +220,14 @@ export class MirrorPanel {
       case 'text':
         this.scrcpy.sendControl(control.injectText(msg.text));
         break;
+      case 'resetVideo':
+        this.log('decoder fell behind; dropped frames and requested a key frame');
+        this.scrcpy.sendControl(control.resetVideo());
+        break;
     }
   }
 
-  private render(port: number, mode: Backend): string {
+  private render(port: number, token: string, mode: Backend): string {
     const webview = this.panel.webview;
     const asUri = (file: string) =>
       webview.asWebviewUri(
@@ -232,7 +254,7 @@ export class MirrorPanel {
 <link rel="stylesheet" href="${asUri('style.css')}">
 <title>Device Mirror</title>
 </head>
-<body data-port="${port}" data-mode="${mode}">
+<body data-port="${port}" data-token="${token}" data-mode="${mode}">
   <div id="stage">
     <canvas id="screen" tabindex="0"></canvas>
     <div id="status">Connecting…</div>
@@ -255,26 +277,31 @@ export class MirrorPanel {
     this.output.appendLine(`[${this.device.serial}] ${line.trimEnd()}`);
   }
 
-  dispose(): void {
+  /**
+   * Idempotent: closing the tab, the Stop command, opening a new mirror and
+   * deactivate() can all land here, sometimes re-entrantly (panel.dispose()
+   * fires onDidDispose). Resolves once the adb forward has been removed.
+   */
+  dispose(): Promise<void> {
+    if (this.disposing) {
+      return this.disposing;
+    }
+    // Set before anything else so re-entrant calls short-circuit.
+    this.disposing = this.scrcpy?.dispose() ?? Promise.resolve();
+
     if (MirrorPanel.current === this) {
       MirrorPanel.current = undefined;
     }
     this.screencap?.dispose();
-    void this.scrcpy?.dispose();
     this.bridge.dispose();
     for (const disposable of this.disposables) {
       disposable.dispose();
     }
     this.panel.dispose();
+    return this.disposing;
   }
 }
 
 function randomNonce(): string {
-  const alphabet =
-    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let out = '';
-  for (let i = 0; i < 32; i++) {
-    out += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
-  }
-  return out;
+  return randomBytes(18).toString('base64');
 }
