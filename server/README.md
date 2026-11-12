@@ -1,17 +1,23 @@
 # scrcpy-server
 
-The `scrcpy` backend needs Genymobile's server binary dropped in this folder as
-`scrcpy-server.jar` (it is git-ignored, and not redistributed here).
+The `scrcpy` backend needs Genymobile's server binary in this folder as
+`scrcpy-server.jar` (it is git-ignored, and not redistributed here). Fetch it
+with:
 
 ```bash
-curl -L -o scrcpy-server.jar \
-  https://github.com/Genymobile/scrcpy/releases/download/v3.1/scrcpy-server-v3.1
+npm run fetch-server
 ```
 
-**The version must match `deviceMirror.scrcpyVersion` exactly.** The server
-checks the version string it is launched with and refuses to run on a mismatch,
-and the `key=value` argument format changed shape across 1.x → 2.x → 3.x. If you
-fetch a different release, update the setting to match.
+That downloads the official
+[v3.1 release](https://github.com/Genymobile/scrcpy/releases/tag/v3.1) and
+saves it only if its SHA-256 matches.
+
+**The extension is pinned to scrcpy 3.1.** The server refuses to run unless it
+is launched with its exact version string, and the `key=value` argument format
+and the control protocol change between releases. The extension checks the
+jar's SHA-256 before starting a session and says so if it is missing or a
+different release. To move to another release, update `src/server.ts`,
+`scripts/fetch-server.js` and the protocol code together.
 
 scrcpy-server is Apache-2.0. If you ever publish this extension, ship the
 upstream LICENSE/NOTICE alongside the jar.
