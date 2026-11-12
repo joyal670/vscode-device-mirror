@@ -60,6 +60,23 @@ export async function pushFile(adb: string, serial: string, localPath: string): 
   return PUSH_DESTINATION + name;
 }
 
+/**
+ * adb's own wording for "this computer can't reach the device over the
+ * network", which on its own (e.g. "protocol fault (couldn't read status
+ * message)") gives no clue that the network is the problem.
+ */
+const UNREACHABLE = /protocol fault|host is down|no route to host|timed out|connection refused|network is unreachable|failed to connect|cannot connect|unable to connect/i;
+
+function explainNetworkError(message: string): Error {
+  if (!UNREACHABLE.test(message)) {
+    return new Error(message);
+  }
+  return new Error(
+    `${message}. This computer could not reach the device: check that both are on the same ` +
+      'network and that the router does not isolate Wi-Fi clients from each other.',
+  );
+}
+
 /** `adb pair` prints "Successfully paired" on success; anything else is a failure. */
 export async function pairWifi(adb: string, hostPort: string, code: string): Promise<void> {
   let out = '';
@@ -70,7 +87,7 @@ export async function pairWifi(adb: string, hostPort: string, code: string): Pro
     out = `${e.stdout ?? ''}${e.stderr ?? ''}`.trim() || String(err);
   }
   if (!/Successfully paired/i.test(out)) {
-    throw new Error(out || 'pairing failed');
+    throw explainNetworkError(out || 'pairing failed');
   }
 }
 
@@ -78,7 +95,7 @@ export async function pairWifi(adb: string, hostPort: string, code: string): Pro
 export async function connectWifi(adb: string, hostPort: string): Promise<void> {
   const out = await adbText(adb, ['connect', hostPort], 15_000);
   if (!/connected to/i.test(out) || /failed|unable|cannot/i.test(out)) {
-    throw new Error(out || 'connect failed');
+    throw explainNetworkError(out || 'connect failed');
   }
 }
 
@@ -103,7 +120,12 @@ export async function switchToWifi(adb: string, serial: string): Promise<string>
       lastError = err;
     }
   }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  // Nothing could connect, so don't leave adbd listening on the network.
+  // Restarting it in USB mode briefly drops the USB connection too; mirrors
+  // reconnect on their own.
+  await adbText(adb, ['-s', serial, 'usb'], 15_000).catch(() => undefined);
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(`${message} The device has been put back in USB mode.`);
 }
 
 async function deviceWifiIp(adb: string, serial: string): Promise<string | undefined> {
